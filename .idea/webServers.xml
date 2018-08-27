@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="WebServers">
+    <option name="servers">
+      <webServer id="b7a2ed4d-b025-4bb3-b572-3ce0559cd76f" name="origin_fullstack" url="http://192.168.56.10">
+        <fileTransfer host="192.168.56.10" port="22" rootFolder="/edx/app/edxapp/edx-platform/lms" accessType="SFTP">
+          <advancedOptions>
+            <advancedOptions dataProtectionLevel="Private" />
+          </advancedOptions>
+          <option name="port" value="22" />
+        </fileTransfer>
+      </webServer>
+    </option>
+  </component>
+</project>
