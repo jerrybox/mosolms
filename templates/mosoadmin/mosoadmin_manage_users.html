@@ -1,0 +1,120 @@
+<%inherit file="../main.html" />
+<%!
+    from django.core.urlresolvers import reverse
+    from django.utils.translation import ugettext as _
+    from django.utils.timezone import utc as UTC
+    from util.date_utils import get_time_display, DEFAULT_DATE_TIME_FORMAT
+    from django.conf import settings
+%>
+<%namespace name='static' file='../static_content.html'/>
+
+<%block name="headextra">
+  <%static:css group='style-course'/>
+  <script type="text/javascript" src="${static.url('js/vendor/flot/jquery.flot.js')}"></script>
+  <script type="text/javascript" src="${static.url('js/vendor/flot/jquery.flot.axislabels.js')}"></script>
+</%block>
+<style type="text/css">
+a.active-section {
+	color: #551A8B;
+}
+.sysadmin-dashboard-content h2 a {
+	margin-right: 1.2em;
+}
+table.stat_table {
+	font-family: verdana,arial,sans-serif;
+	font-size:11px;
+	color:#333333;
+	border-width: 1px;
+	border-color: #666666;
+	border-collapse: collapse;
+}
+table.stat_table th {
+	border-width: 1px;
+	padding: 8px;
+	border-style: solid;
+	border-color: #666666;
+	background-color: #dedede;
+}
+table.stat_table td {
+	border-width: 1px;
+	padding: 8px;
+	border-style: solid;
+	border-color: #666666;
+	background-color: #ffffff;
+}
+.import-log {
+    display: none;
+}
+
+.pagination, .page-status {
+    text-align: center;
+    padding: 12px 0 12px 0;
+}
+
+.pagination .previous-page {
+    padding-right: 10px;
+}
+
+.pagination .next-page {
+    padding-left: 10px;
+}
+
+a.selectedmode { background-color: yellow; }
+
+textarea {
+  height: 200px;
+}
+
+
+</style>
+
+<section class="container">
+  <div class="sysadmin-dashboard-wrapper">
+
+    <section class="sysadmin-dashboard-content" style="margin-left:10pt;margin-top:10pt;margin-right:10pt;margin-bottom:20pt">
+      <h1>${_('Sysadmin Dashboard')}</h1>
+      <hr />
+      <h2 class="instructor-nav">
+        <a href="${reverse('createuser')}">创建用户</a>
+        <a href="${reverse('createschool')}">创建学校</a>
+        <a href="${reverse('manageusers')}">管理用户</a>
+      </h2>
+      <hr />
+
+      <form name="action" method="POST">
+        <p>${msg}</p>
+        <input type="hidden" name="csrfmiddlewaretoken" value="${ csrf_token }" />
+
+        <ul class="list-input">
+          <li class="field text" style="padding-bottom: 1.2em">
+            <label for="student_uname">${_('Email or username')}</label>
+            <input type="text" name="student_uname" size=40 />
+          </li>
+
+          <li class="field text">
+            <label for="student_fullname">${_('Full Name')}</label>
+            <input type="text" name="student_fullname" size=40 />
+          </li>
+          <li class="field text">
+            <label for="student_password">${_('Password')}</label>
+            <input type="password" name="student_password" size=40 />
+          </li>
+        </ul>
+
+        <div class="form-actions">
+          <p>
+            <button type="submit" name="action" value="create_user">${_('Create user')}</button>
+          </p>
+        </div>
+
+      </form>
+
+    </section>
+  </div>
+</section>
+
+<%block name="js_extra">
+  <script type="text/javascript">
+
+  </script>
+</%block>

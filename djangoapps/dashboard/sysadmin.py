@@ -192,11 +192,13 @@ class Users(SysadminDashboardView):
         user = User(username=uname, email=email, is_active=True)
         user.set_password(new_password)
         try:
-            user.save()
-        except IntegrityError:
+            from django.db import transaction
+            with transaction.atomic():
+                user.save()
+        except IntegrityError as error:
             msg += _('Oops, failed to create user {user}, {error}').format(
                 user=user,
-                error="IntegrityError"
+                error="IntegrityError:{}".format(error)
             )
             return msg
 

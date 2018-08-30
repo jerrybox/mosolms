@@ -1,5 +1,6 @@
+# -*- coding:utf-8 -*-
 """
-This module creates a sysadmin dashboard for managing and viewing
+This module creates a mosoadmin dashboard for managing and viewing
 courses.
 """
 import unicodecsv as csv
@@ -37,119 +38,337 @@ from dashboard.models import CourseImportLog
 from edxmako.shortcuts import render_to_response
 from openedx.core.djangoapps.external_auth.models import ExternalAuthMap
 from openedx.core.djangoapps.external_auth.views import generate_password
-from student.models import CourseEnrollment, Registration, UserProfile
 from student.roles import CourseInstructorRole, CourseStaffRole
 from xmodule.modulestore.django import modulestore
 
 log = logging.getLogger(__name__)
 
+from django.shortcuts import redirect
+from mosoadmin.models import MosoUser,MosoSchool
+from xmodule.modulestore.django import modulestore
 
-class SysadminDashboardView(TemplateView):
-    """Base class for sysadmin dashboard views with common methods"""
+from opaque_keys.edx.locations import SlashSeparatedCourseKey
+import re
+from student.models import (
+    ALLOWEDTOENROLL_TO_ENROLLED,
+    ALLOWEDTOENROLL_TO_UNENROLLED,
+    DEFAULT_TRANSITION_STATE,
+    ENROLLED_TO_ENROLLED,
+    ENROLLED_TO_UNENROLLED,
+    UNENROLLED_TO_ALLOWEDTOENROLL,
+    UNENROLLED_TO_ENROLLED,
+    UNENROLLED_TO_UNENROLLED,
+    CourseEnrollment,
+    EntranceExamConfiguration,
+    ManualEnrollmentAudit,
+    Registration,
+    UserProfile,
+    anonymous_id_for_user,
+    get_user_by_username_or_email,
+    unique_id_for_user,
+    UserAttribute
+)
+from lms.djangoapps.instructor.enrollment import (
+    enroll_email,
+    get_email_params,
+    get_user_email_language,
+    send_beta_role_email,
+    send_mail_to_student,
+    unenroll_email
+)
+from lms.djangoapps.instructor.views.tools import (
+    dump_module_extensions,
+    dump_student_extensions,
+    find_unit,
+    get_student_from_identifier,
+    handle_dashboard_error,
+    parse_datetime,
+    require_student_from_identifier,
+    set_due_date_extension,
+    strip_if_string
+)
+from django.core.validators import validate_email
+from django.http import HttpResponse, HttpResponseBadRequest
+from django.utils.html import strip_tags
+from django.core.exceptions import ObjectDoesNotExist, PermissionDenied, ValidationError
 
-    template_name = 'sysadmin_dashboard.html'
+from opaque_keys.edx.keys import CourseKey
+from course_modes.models import CourseMode, CourseModesArchive
+from django.core.urlresolvers import reverse
+
+
+def _split_input_list(str_list):
+    new_list = re.split(r'[\n\r\s,]', str_list)
+    new_list = [s.strip() for s in new_list]
+    new_list = [s for s in new_list if s != '']
+    return new_list
+
+
+def _get_boolean_param(request, param_name):
+    return request.POST.get(param_name, False) in ['true', 'True', True]
+
+
+class CourseEnroll(TemplateView):
+    template_name = 'mosoadmin/mosoadmin_course_enrollment.html'
+    msg = None
 
     def __init__(self, **kwargs):
-        """
-        Initialize base sysadmin dashboard class with modulestore,
-        modulestore_type and return msg
-        """
-
-        self.def_ms = modulestore()
         self.msg = u''
-        self.datatable = []
-        super(SysadminDashboardView, self).__init__(**kwargs)
+        super(CourseEnroll,self).__init__(**kwargs)
 
-    @method_decorator(ensure_csrf_cookie)
-    @method_decorator(login_required)
-    @method_decorator(cache_control(no_cache=True, no_store=True,
-                                    must_revalidate=True))
-    @method_decorator(condition(etag_func=None))
-    def dispatch(self, *args, **kwargs):
-        return super(SysadminDashboardView, self).dispatch(*args, **kwargs)
+    def make_common_context(self):
+        """Returns the datatable used for this view"""
+        pass
 
-    def get_courses(self):
-        """ Get an iterable list of courses."""
+    def make_datatable(self):
+        """Creates course information datatable"""
+        def_ms = modulestore()
+        courselist = def_ms.get_courses()
 
-        return self.def_ms.get_courses()
+        data = []
+        for course in courselist:
+            data.append([course.display_name, course.id.to_deprecated_string()])
 
-    def return_csv(self, filename, header, data):
-        """
-        Convenient function for handling the http response of a csv.
-        data should be iterable and is used to stream object over http
-        """
+        return dict(header=[_('Course Name'),
+                            _('Directory/ID'),],
+                    title=_('Information about all courses'),
+                    data=data)
 
-        csv_file = StringIO.StringIO()
-        writer = csv.writer(csv_file, dialect='excel', quotechar='"',
-                            quoting=csv.QUOTE_ALL)
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_authenticated():
+            return redirect("/login")
+        if not UserAttribute.get_user_attribute(request.user, "access_mosoadmin"):
+            return HttpResponse("No permission")
 
-        writer.writerow(header)
+        context = {'msg':self.msg,
+                   'datatable':self.make_datatable()
+                   }
+        return render_to_response(self.template_name, context)
 
-        # Setup streaming of the data
-        def read_and_flush():
-            """Read and clear buffer for optimization"""
-            csv_file.seek(0)
-            csv_data = csv_file.read()
-            csv_file.seek(0)
-            csv_file.truncate()
-            return csv_data
+    def post(self, request, *args, **kwargs):
 
-        def csv_data():
-            """Generator for handling potentially large CSVs"""
-            for row in data:
-                writer.writerow(row)
-            csv_data = read_and_flush()
-            yield csv_data
-        response = HttpResponse(csv_data(), content_type='text/csv')
-        response['Content-Disposition'] = 'attachment; filename={0}'.format(
-            filename)
-        return response
+        course_id = request.POST.get('course_id', False)
+        if not course_id:
+            self.msg = "No course_id"
+            context = {'msg': self.msg,
+                       'datatable': self.make_datatable()
+                       }
+            return render_to_response(self.template_name, context)
+
+        course_id = SlashSeparatedCourseKey.from_deprecated_string(course_id)
+        action = request.POST.get('action')
+        identifiers_raw = request.POST.get('identifiers')
+        identifiers = _split_input_list(identifiers_raw)
+        auto_enroll = _get_boolean_param(request, 'auto_enroll')
+        email_students = _get_boolean_param(request, 'email_students')
+        is_white_label = CourseMode.is_white_label(course_id)
+        reason = request.POST.get('reason')
+
+        if is_white_label:
+            if not reason:
+                self.msg = "400"
+                context = {'msg': self.msg,
+                           'datatable': self.make_datatable()
+                           }
+                return render_to_response(self.template_name, context)
+
+        enrollment_obj = None
+        state_transition = DEFAULT_TRANSITION_STATE
+
+        email_params = {}
+        if email_students:
+            course = get_course_by_id(course_id)
+            email_params = get_email_params(course, auto_enroll, secure=request.is_secure())
+
+        results = []
+        for identifier in identifiers:
+            # First try to get a user object from the identifer
+            user = None
+            email = None
+            language = None
+            try:
+                user = get_student_from_identifier(identifier)
+            except User.DoesNotExist:
+                email = identifier
+            else:
+                email = user.email
+                language = get_user_email_language(user)
+
+            try:
+                # Use django.core.validators.validate_email to check email address
+                # validity (obviously, cannot check if email actually /exists/,
+                # simply that it is plausibly valid)
+                validate_email(email)  # Raises ValidationError if invalid
+                if action == 'enroll':
+                    before, after, enrollment_obj = enroll_email(
+                        course_id, email, auto_enroll, email_students, email_params, language=language
+                    )
+                    before_enrollment = before.to_dict()['enrollment']
+                    before_user_registered = before.to_dict()['user']
+                    before_allowed = before.to_dict()['allowed']
+                    after_enrollment = after.to_dict()['enrollment']
+                    after_allowed = after.to_dict()['allowed']
+
+                    if before_user_registered:
+                        if after_enrollment:
+                            if before_enrollment:
+                                state_transition = ENROLLED_TO_ENROLLED
+                            else:
+                                if before_allowed:
+                                    state_transition = ALLOWEDTOENROLL_TO_ENROLLED
+                                else:
+                                    state_transition = UNENROLLED_TO_ENROLLED
+                    else:
+                        if after_allowed:
+                            state_transition = UNENROLLED_TO_ALLOWEDTOENROLL
+
+                elif action == 'unenroll':
+                    before, after = unenroll_email(
+                        course_id, email, email_students, email_params, language=language
+                    )
+                    before_enrollment = before.to_dict()['enrollment']
+                    before_allowed = before.to_dict()['allowed']
+                    enrollment_obj = CourseEnrollment.get_enrollment(user, course_id)
+
+                    if before_enrollment:
+                        state_transition = ENROLLED_TO_UNENROLLED
+                    else:
+                        if before_allowed:
+                            state_transition = ALLOWEDTOENROLL_TO_UNENROLLED
+                        else:
+                            state_transition = UNENROLLED_TO_UNENROLLED
+
+                else:
+                    return HttpResponseBadRequest(strip_tags(
+                        "Unrecognized action '{}'".format(action)
+                    ))
+
+            except ValidationError:
+                # Flag this email as an error if invalid, but continue checking
+                # the remaining in the list
+                results.append({
+                    'identifier': identifier,
+                    'invalidIdentifier': True,
+                })
+                # results.append(u"{} 验证失败,请检查用户是否存在。".format(identifier))
+
+            except Exception as exc:  # pylint: disable=broad-except
+                # catch and log any exceptions
+                # so that one error doesn't cause a 500.
+                log.exception(u"Error while #{}ing student")
+                log.exception(exc)
+                results.append({
+                    'identifier': identifier,
+                    'error': True,
+                })
+                # results.append(u"{} 验证失败,请检查输入内容。".format(identifier))
+
+            else:
+                ManualEnrollmentAudit.create_manual_enrollment_audit(
+                    request.user, email, state_transition, reason, enrollment_obj
+                )
+                results.append({
+                    'identifier': identifier,
+                    'before': before.to_dict(),
+                    'after': after.to_dict(),
+                })
+                # if identifier:
+                #     results.append(u"{} 验证失败,请检查输入内容。".format(identifier))
+        # response_payload = {
+        #     'action': action,
+        #     'results': results,
+        #     'auto_enroll': auto_enroll,
+        # }
+        # return JsonResponse(response_payload)
+        invalid_id = []
+        valid_id = []
+
+        for result in results:
+            if ('error' in result) or ('invalidIdentifier' in result):
+                invalid_id.append(result['identifier'])
+            else:
+                valid_id.append(result['identifier'])
+
+        invalid_message = ["{} 无效 <br>".format(i) for i in invalid_id]
+        valid_message = []
+
+        action = "选课" if action == "enroll" else "弃选"
+
+        for i in valid_id:
+            if action == "弃选":
+                valid_message.append("{0}  {1} 成功 <br>".format(i, action))
+                continue
+            if email_students:
+                valid_message.append("{0}  {1} 成功，并向他发送电子邮件 <br>".format(i, action))
+            else:
+                valid_message.append("{0}  {1} 成功<br>".format(i, action))
+        invalid_message.extend(valid_message)
+
+        import json
+        self.msg = "".join(invalid_message)
+
+        context = {'msg': self.msg,
+                   'datatable': self.make_datatable()
+                   }
+        return render_to_response(self.template_name, context)
 
 
-class Users(SysadminDashboardView):
+class CreateSchool(TemplateView):
+    pass
+
+
+class ManageUsers(TemplateView):
+    pass
+
+
+class CreateUser(TemplateView):
     """
     The status view provides Web based user management, a listing of
     courses loaded, and user statistics
     """
+    template_name = 'mosoadmin/mosoadmin_create_user.html'
+    msg = None
 
-    def fix_external_auth_map_passwords(self):
-        """
-        This corrects any passwords that have drifted from eamap to
-        internal django auth.  Needs to be removed when fixed in external_auth
-        """
+    def __init__(self, **kwargs):
+        self.msg = u''
+        super(CreateUser,self).__init__(**kwargs)
 
-        msg = ''
-        for eamap in ExternalAuthMap.objects.all():
-            euser = eamap.user
-            epass = eamap.internal_password
-            if euser is None:
-                continue
-            try:
-                testuser = authenticate(username=euser.username, password=epass)
-            except (TypeError, PermissionDenied, AttributeError), err:
-                # Translators: This message means that the user could not be authenticated (that is, we could
-                # not log them in for some reason - maybe they don't have permission, or their password was wrong)
-                msg += _('Failed in authenticating {username}, error {error}\n').format(
-                    username=euser,
-                    error=err
-                )
-                continue
-            if testuser is None:
-                # Translators: This message means that the user could not be authenticated (that is, we could
-                # not log them in for some reason - maybe they don't have permission, or their password was wrong)
-                msg += _('Failed in authenticating {username}\n').format(username=euser)
-                # Translators: this means that the password has been corrected (sometimes the database needs to be resynchronized)
-                # Translate this as meaning "the password was fixed" or "the password was corrected".
-                msg += _('fixed password')
-                euser.set_password(epass)
-                euser.save()
-                continue
-        if not msg:
-            # Translators: this means everything happened successfully, yay!
-            msg = _('All ok!')
-        return msg
+    def make_common_context(self):
+        """Returns the datatable used for this view"""
+        pass
 
-    def create_user(self, uname, name, password=None):
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_authenticated():
+            return redirect("/login")
+        if not UserAttribute.get_user_attribute(request.user, "access_mosoadmin"):
+            return HttpResponse("No permission")
+
+        context = {'msg':self.msg,}
+        return render_to_response(self.template_name, context)
+
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated():
+            return redirect("/login")
+        if not UserAttribute.get_user_attribute(request.user, "access_mosoadmin"):
+            return HttpResponse("No permission")
+
+        self.make_common_context()
+        action = request.POST.get('action', '')
+
+        if action == 'create_user':
+            uname = request.POST.get('student_uname', '').strip()
+            name = request.POST.get('student_fullname', '').strip()
+            password = request.POST.get('student_password', '').strip()
+            self.msg = u'<h4>{0}</h4><p>{1}</p><hr />'.format(
+                _('Create User Results'),
+                self.create_user(uname, name, password, request))
+
+        context = {
+            'msg': self.msg,
+        }
+        return render_to_response(self.template_name, context)
+
+    def create_user(self, uname, name, password=None, request=None):
         """ Creates a user (both SSL and regular)"""
 
         if not uname:
@@ -157,46 +376,28 @@ class Users(SysadminDashboardView):
         if not name:
             return _('Must provide full name')
 
-        email_domain = getattr(settings, 'SSL_AUTH_EMAIL_DOMAIN', 'MIT.EDU')
-
         msg = u''
-        if settings.FEATURES['AUTH_USE_CERTIFICATES']:
-            if '@' not in uname:
-                email = '{0}@{1}'.format(uname, email_domain)
-            else:
-                email = uname
-            if not email.endswith('@{0}'.format(email_domain)):
-                # Translators: Domain is an email domain, such as "@gmail.com"
-                msg += _('Email address must end in {domain}').format(domain="@{0}".format(email_domain))
-                return msg
-            mit_domain = 'ssl:MIT'
-            if ExternalAuthMap.objects.filter(external_id=email,
-                                              external_domain=mit_domain):
-                msg += _('Failed - email {email_addr} already exists as {external_id}').format(
-                    email_addr=email,
-                    external_id="external_id"
-                )
-                return msg
-            new_password = generate_password()
-        else:
-            if not password:
-                return _('Password must be supplied if not using certificates')
 
-            email = uname
+        if '@' not in uname:
+            msg += _('Email address must contain @')
+            return msg
+        elif not password:
+            msg += _('Password must be supplied if not using certificates')
+            return msg
 
-            if '@' not in email:
-                msg += _('email address required (not username)')
-                return msg
-            new_password = password
+        email = uname
+        new_password = password
 
-        user = User(username=uname, email=email, is_active=True)
-        user.set_password(new_password)
         try:
-            user.save()
+            from django.db import transaction
+            with transaction.atomic():
+                user = User(username=uname, email=email, is_active=True)
+                user.set_password(new_password)
+                user.save()
         except IntegrityError:
             msg += _('Oops, failed to create user {user}, {error}').format(
-                user=user,
-                error="IntegrityError"
+                user=uname,
+                error="{} already exist.".format(email)
             )
             return msg
 
@@ -207,455 +408,8 @@ class Users(SysadminDashboardView):
         profile.name = name
         profile.save()
 
-        if settings.FEATURES['AUTH_USE_CERTIFICATES']:
-            credential_string = getattr(settings, 'SSL_AUTH_DN_FORMAT_STRING',
-                                        '/C=US/ST=Massachusetts/O=Massachusetts Institute of Technology/OU=Client CA v1/CN={0}/emailAddress={1}')
-            credentials = credential_string.format(name, email)
-            eamap = ExternalAuthMap(
-                external_id=email,
-                external_email=email,
-                external_domain=mit_domain,
-                external_name=name,
-                internal_password=new_password,
-                external_credentials=json.dumps(credentials),
-            )
-            eamap.user = user
-            eamap.dtsignup = timezone.now()
-            eamap.save()
+        mosouser = MosoUser(user=user,creted_by=request.user)
+        mosouser.save()
 
         msg += _('User {user} created successfully!').format(user=user)
         return msg
-
-    def delete_user(self, uname):
-        """Deletes a user from django auth"""
-
-        if not uname:
-            return _('Must provide username')
-        if '@' in uname:
-            try:
-                user = User.objects.get(email=uname)
-            except User.DoesNotExist, err:
-                msg = _('Cannot find user with email address {email_addr}').format(email_addr=uname)
-                return msg
-        else:
-            try:
-                user = User.objects.get(username=uname)
-            except User.DoesNotExist, err:
-                msg = _('Cannot find user with username {username} - {error}').format(
-                    username=uname,
-                    error=str(err)
-                )
-                return msg
-        user.delete()
-        return _('Deleted user {username}').format(username=uname)
-
-    def make_common_context(self):
-        """Returns the datatable used for this view"""
-
-        self.datatable = {}
-
-        self.datatable = dict(header=[_('Statistic'), _('Value')],
-                              title=_('Site statistics'))
-        self.datatable['data'] = [[_('Total number of users'),
-                                   User.objects.all().count()]]
-
-        self.msg += u'<h2>{0}</h2>'.format(
-            _('Courses loaded in the modulestore')
-        )
-        self.msg += u'<ol>'
-        for course in self.get_courses():
-            self.msg += u'<li>{0} ({1})</li>'.format(
-                escape(course.id.to_deprecated_string()), course.location.to_deprecated_string())
-        self.msg += u'</ol>'
-
-    def get(self, request):
-
-        if not request.user.is_staff:
-            raise Http404
-        self.make_common_context()
-
-        context = {
-            'datatable': self.datatable,
-            'msg': self.msg,
-            'djangopid': os.getpid(),
-            'modeflag': {'users': 'active-section'},
-            'edx_platform_version': getattr(settings, 'EDX_PLATFORM_VERSION_STRING', ''),
-        }
-        return render_to_response(self.template_name, context)
-
-    def post(self, request):
-        """Handle various actions available on page"""
-
-        if not request.user.is_staff:
-            raise Http404
-
-        self.make_common_context()
-
-        action = request.POST.get('action', '')
-        track.views.server_track(request, action, {}, page='user_sysdashboard')
-
-        if action == 'download_users':
-            header = [_('username'), _('email'), ]
-            data = ([u.username, u.email] for u in
-                    (User.objects.all().iterator()))
-            return self.return_csv('users_{0}.csv'.format(
-                request.META['SERVER_NAME']), header, data)
-        elif action == 'repair_eamap':
-            self.msg = u'<h4>{0}</h4><pre>{1}</pre>{2}'.format(
-                _('Repair Results'),
-                self.fix_external_auth_map_passwords(),
-                self.msg)
-            self.datatable = {}
-        elif action == 'create_user':
-            uname = request.POST.get('student_uname', '').strip()
-            name = request.POST.get('student_fullname', '').strip()
-            password = request.POST.get('student_password', '').strip()
-            self.msg = u'<h4>{0}</h4><p>{1}</p><hr />{2}'.format(
-                _('Create User Results'),
-                self.create_user(uname, name, password), self.msg)
-        elif action == 'del_user':
-            uname = request.POST.get('student_uname', '').strip()
-            self.msg = u'<h4>{0}</h4><p>{1}</p><hr />{2}'.format(
-                _('Delete User Results'), self.delete_user(uname), self.msg)
-
-        context = {
-            'datatable': self.datatable,
-            'msg': self.msg,
-            'djangopid': os.getpid(),
-            'modeflag': {'users': 'active-section'},
-            'edx_platform_version': getattr(settings, 'EDX_PLATFORM_VERSION_STRING', ''),
-        }
-        return render_to_response(self.template_name, context)
-
-
-class Courses(SysadminDashboardView):
-    """
-    This manages adding/updating courses from git, deleting courses, and
-    provides course listing information.
-    """
-
-    def git_info_for_course(self, cdir):
-        """This pulls out some git info like the last commit"""
-
-        cmd = ''
-        gdir = settings.DATA_DIR / cdir
-        info = ['', '', '']
-
-        # Try the data dir, then try to find it in the git import dir
-        if not gdir.exists():
-            git_repo_dir = getattr(settings, 'GIT_REPO_DIR', git_import.DEFAULT_GIT_REPO_DIR)
-            gdir = path(git_repo_dir) / cdir
-            if not gdir.exists():
-                return info
-
-        cmd = ['git', 'log', '-1',
-               '--format=format:{ "commit": "%H", "author": "%an %ae", "date": "%ad"}', ]
-        try:
-            output_json = json.loads(subprocess.check_output(cmd, cwd=gdir))
-            info = [output_json['commit'],
-                    output_json['date'],
-                    output_json['author'], ]
-        except (ValueError, subprocess.CalledProcessError):
-            pass
-
-        return info
-
-    def get_course_from_git(self, gitloc, branch):
-        """This downloads and runs the checks for importing a course in git"""
-
-        if not (gitloc.endswith('.git') or gitloc.startswith('http:') or
-                gitloc.startswith('https:') or gitloc.startswith('git:')):
-            return _("The git repo location should end with '.git', "
-                     "and be a valid url")
-
-        return self.import_mongo_course(gitloc, branch)
-
-    def import_mongo_course(self, gitloc, branch):
-        """
-        Imports course using management command and captures logging output
-        at debug level for display in template
-        """
-
-        msg = u''
-
-        log.debug('Adding course using git repo %s', gitloc)
-
-        # Grab logging output for debugging imports
-        output = StringIO.StringIO()
-        import_log_handler = logging.StreamHandler(output)
-        import_log_handler.setLevel(logging.DEBUG)
-
-        logger_names = ['xmodule.modulestore.xml_importer',
-                        'dashboard.git_import',
-                        'xmodule.modulestore.xml',
-                        'xmodule.seq_module', ]
-        loggers = []
-
-        for logger_name in logger_names:
-            logger = logging.getLogger(logger_name)
-            logger.setLevel(logging.DEBUG)
-            logger.addHandler(import_log_handler)
-            loggers.append(logger)
-
-        error_msg = ''
-        try:
-            git_import.add_repo(gitloc, None, branch)
-        except GitImportError as ex:
-            error_msg = str(ex)
-        ret = output.getvalue()
-
-        # Remove handler hijacks
-        for logger in loggers:
-            logger.setLevel(logging.NOTSET)
-            logger.removeHandler(import_log_handler)
-
-        if error_msg:
-            msg_header = error_msg
-            color = 'red'
-        else:
-            msg_header = _('Added Course')
-            color = 'blue'
-
-        msg = u"<h4 style='color:{0}'>{1}</h4>".format(color, msg_header)
-        msg += u"<pre>{0}</pre>".format(escape(ret))
-        return msg
-
-    def make_datatable(self):
-        """Creates course information datatable"""
-
-        data = []
-
-        for course in self.get_courses():
-            gdir = course.id.course
-            data.append([course.display_name, course.id.to_deprecated_string()]
-                        + self.git_info_for_course(gdir))
-
-        return dict(header=[_('Course Name'),
-                            _('Directory/ID'),
-                            # Translators: "Git Commit" is a computer command; see http://gitref.org/basic/#commit
-                            _('Git Commit'),
-                            _('Last Change'),
-                            _('Last Editor')],
-                    title=_('Information about all courses'),
-                    data=data)
-
-    def get(self, request):
-        """Displays forms and course information"""
-
-        if not request.user.is_staff:
-            raise Http404
-
-        context = {
-            'datatable': self.make_datatable(),
-            'msg': self.msg,
-            'djangopid': os.getpid(),
-            'modeflag': {'courses': 'active-section'},
-            'edx_platform_version': getattr(settings, 'EDX_PLATFORM_VERSION_STRING', ''),
-        }
-        return render_to_response(self.template_name, context)
-
-    def post(self, request):
-        """Handle all actions from courses view"""
-
-        if not request.user.is_staff:
-            raise Http404
-
-        action = request.POST.get('action', '')
-        track.views.server_track(request, action, {},
-                                 page='courses_sysdashboard')
-
-        courses = {course.id: course for course in self.get_courses()}
-        if action == 'add_course':
-            gitloc = request.POST.get('repo_location', '').strip().replace(' ', '').replace(';', '')
-            branch = request.POST.get('repo_branch', '').strip().replace(' ', '').replace(';', '')
-            self.msg += self.get_course_from_git(gitloc, branch)
-
-        elif action == 'del_course':
-            course_id = request.POST.get('course_id', '').strip()
-            course_key = SlashSeparatedCourseKey.from_deprecated_string(course_id)
-            course_found = False
-            if course_key in courses:
-                course_found = True
-                course = courses[course_key]
-            else:
-                try:
-                    course = get_course_by_id(course_key)
-                    course_found = True
-                except Exception, err:   # pylint: disable=broad-except
-                    self.msg += _(
-                        'Error - cannot get course with ID {0}<br/><pre>{1}</pre>'
-                    ).format(
-                        course_key,
-                        escape(str(err))
-                    )
-
-            if course_found:
-                # delete course that is stored with mongodb backend
-                self.def_ms.delete_course(course.id, request.user.id)
-                # don't delete user permission groups, though
-                self.msg += \
-                    u"<font color='red'>{0} {1} = {2} ({3})</font>".format(
-                        _('Deleted'), course.location.to_deprecated_string(), course.id.to_deprecated_string(), course.display_name)
-
-        context = {
-            'datatable': self.make_datatable(),
-            'msg': self.msg,
-            'djangopid': os.getpid(),
-            'modeflag': {'courses': 'active-section'},
-            'edx_platform_version': getattr(settings, 'EDX_PLATFORM_VERSION_STRING', ''),
-        }
-        return render_to_response(self.template_name, context)
-
-
-class Staffing(SysadminDashboardView):
-    """
-    The status view provides a view of staffing and enrollment in
-    courses that include an option to download the data as a csv.
-    """
-
-    def get(self, request):
-        """Displays course Enrollment and staffing course statistics"""
-
-        if not request.user.is_staff:
-            raise Http404
-        data = []
-
-        for course in self.get_courses():
-            datum = [course.display_name, course.id]
-            datum += [CourseEnrollment.objects.filter(
-                course_id=course.id).count()]
-            datum += [CourseStaffRole(course.id).users_with_role().count()]
-            datum += [','.join([x.username for x in CourseInstructorRole(
-                course.id).users_with_role()])]
-            data.append(datum)
-
-        datatable = dict(header=[_('Course Name'), _('course_id'),
-                                 _('# enrolled'), _('# staff'),
-                                 _('instructors')],
-                         title=_('Enrollment information for all courses'),
-                         data=data)
-        context = {
-            'datatable': datatable,
-            'msg': self.msg,
-            'djangopid': os.getpid(),
-            'modeflag': {'staffing': 'active-section'},
-            'edx_platform_version': getattr(settings, 'EDX_PLATFORM_VERSION_STRING', ''),
-        }
-        return render_to_response(self.template_name, context)
-
-    def post(self, request):
-        """Handle all actions from staffing and enrollment view"""
-
-        action = request.POST.get('action', '')
-        track.views.server_track(request, action, {},
-                                 page='staffing_sysdashboard')
-
-        if action == 'get_staff_csv':
-            data = []
-            roles = [CourseInstructorRole, CourseStaffRole, ]
-
-            for course in self.get_courses():
-                for role in roles:
-                    for user in role(course.id).users_with_role():
-                        datum = [course.id, role, user.username, user.email,
-                                 user.profile.name]
-                        data.append(datum)
-            header = [_('course_id'),
-                      _('role'), _('username'),
-                      _('email'), _('full_name'), ]
-            return self.return_csv('staff_{0}.csv'.format(
-                request.META['SERVER_NAME']), header, data)
-
-        return self.get(request)
-
-
-class GitLogs(TemplateView):
-    """
-    This provides a view into the import of courses from git repositories.
-    It is convenient for allowing course teams to see what may be wrong with
-    their xml
-    """
-
-    template_name = 'sysadmin_dashboard_gitlogs.html'
-
-    @method_decorator(login_required)
-    def get(self, request, *args, **kwargs):
-        """Shows logs of imports that happened as a result of a git import"""
-
-        course_id = kwargs.get('course_id')
-        if course_id:
-            course_id = SlashSeparatedCourseKey.from_deprecated_string(course_id)
-
-        page_size = 10
-
-        # Set mongodb defaults even if it isn't defined in settings
-        mongo_db = {
-            'host': 'localhost',
-            'user': '',
-            'password': '',
-            'db': 'xlog',
-        }
-
-        # Allow overrides
-        if hasattr(settings, 'MONGODB_LOG'):
-            for config_item in ['host', 'user', 'password', 'db', ]:
-                mongo_db[config_item] = settings.MONGODB_LOG.get(
-                    config_item, mongo_db[config_item])
-
-        mongouri = 'mongodb://{user}:{password}@{host}/{db}'.format(**mongo_db)
-
-        error_msg = ''
-
-        try:
-            if mongo_db['user'] and mongo_db['password']:
-                mdb = mongoengine.connect(mongo_db['db'], host=mongouri)
-            else:
-                mdb = mongoengine.connect(mongo_db['db'], host=mongo_db['host'])
-        except mongoengine.connection.ConnectionError:
-            log.exception('Unable to connect to mongodb to save log, '
-                          'please check MONGODB_LOG settings.')
-
-        if course_id is None:
-            # Require staff if not going to specific course
-            if not request.user.is_staff:
-                raise Http404
-            cilset = CourseImportLog.objects.order_by('-created')
-        else:
-            try:
-                course = get_course_by_id(course_id)
-            except Exception:
-                log.info('Cannot find course %s', course_id)
-                raise Http404
-
-            # Allow only course team, instructors, and staff
-            if not (request.user.is_staff or
-                    CourseInstructorRole(course.id).has_user(request.user) or
-                    CourseStaffRole(course.id).has_user(request.user)):
-                raise Http404
-            log.debug('course_id=%s', course_id)
-            cilset = CourseImportLog.objects.filter(
-                course_id=course_id
-            ).order_by('-created')
-            log.debug('cilset length=%s', len(cilset))
-
-        # Paginate the query set
-        paginator = Paginator(cilset, page_size)
-        try:
-            logs = paginator.page(request.GET.get('page'))
-        except PageNotAnInteger:
-            logs = paginator.page(1)
-        except EmptyPage:
-            # If the page is too high or low
-            given_page = int(request.GET.get('page'))
-            page = min(max(1, given_page), paginator.num_pages)
-            logs = paginator.page(page)
-
-        mdb.disconnect()
-        context = {
-            'logs': logs,
-            'course_id': course_id.to_deprecated_string() if course_id else None,
-            'error_msg': error_msg,
-            'page_size': page_size
-        }
-
-        return render_to_response(self.template_name, context)
