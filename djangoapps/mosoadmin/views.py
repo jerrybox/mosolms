@@ -1,6 +1,6 @@
 # -*- coding:utf-8 -*-
 """
-This module creates a mosoadmin dashboard for managing and viewing
+This module creates a mosoadmin dashboard for managing  and viewing
 courses.
 """
 import unicodecsv as csv
@@ -40,8 +40,6 @@ from openedx.core.djangoapps.external_auth.models import ExternalAuthMap
 from openedx.core.djangoapps.external_auth.views import generate_password
 from student.roles import CourseInstructorRole, CourseStaffRole
 from xmodule.modulestore.django import modulestore
-
-log = logging.getLogger(__name__)
 
 from django.shortcuts import redirect
 from mosoadmin.models import MosoUser,MosoSchool
@@ -97,6 +95,17 @@ from course_modes.models import CourseMode, CourseModesArchive
 from django.core.urlresolvers import reverse
 
 
+from mosoadmin.models import (
+    MosoSchool,
+    Province,
+    MosoRole,
+    MosoUser,
+    MosoContract,
+    ContractItem
+)
+
+log = logging.getLogger(__name__)
+
 def _split_input_list(str_list):
     new_list = re.split(r'[\n\r\s,]', str_list)
     new_list = [s.strip() for s in new_list]
@@ -148,14 +157,24 @@ class CourseEnroll(TemplateView):
     def post(self, request, *args, **kwargs):
 
         course_id = request.POST.get('course_id', False)
+        try:
+            course_id = SlashSeparatedCourseKey.from_deprecated_string(course_id)
+        except Exception:
+            course_id = None
+
         if not course_id:
-            self.msg = "No course_id"
+            self.msg = u"课程ID错误"
+            context = {'msg': self.msg,
+                       'datatable': self.make_datatable()
+                       }
+            return render_to_response(self.template_name, context)
+        elif not request.POST.get('identifiers'):
+            self.msg = u"邮箱用户名错误"
             context = {'msg': self.msg,
                        'datatable': self.make_datatable()
                        }
             return render_to_response(self.template_name, context)
 
-        course_id = SlashSeparatedCourseKey.from_deprecated_string(course_id)
         action = request.POST.get('action')
         identifiers_raw = request.POST.get('identifiers')
         identifiers = _split_input_list(identifiers_raw)
@@ -250,7 +269,6 @@ class CourseEnroll(TemplateView):
                     'identifier': identifier,
                     'invalidIdentifier': True,
                 })
-                # results.append(u"{} 验证失败,请检查用户是否存在。".format(identifier))
 
             except Exception as exc:  # pylint: disable=broad-except
                 # catch and log any exceptions
@@ -261,7 +279,6 @@ class CourseEnroll(TemplateView):
                     'identifier': identifier,
                     'error': True,
                 })
-                # results.append(u"{} 验证失败,请检查输入内容。".format(identifier))
 
             else:
                 ManualEnrollmentAudit.create_manual_enrollment_audit(
@@ -272,14 +289,7 @@ class CourseEnroll(TemplateView):
                     'before': before.to_dict(),
                     'after': after.to_dict(),
                 })
-                # if identifier:
-                #     results.append(u"{} 验证失败,请检查输入内容。".format(identifier))
-        # response_payload = {
-        #     'action': action,
-        #     'results': results,
-        #     'auto_enroll': auto_enroll,
-        # }
-        # return JsonResponse(response_payload)
+
         invalid_id = []
         valid_id = []
 
@@ -289,7 +299,7 @@ class CourseEnroll(TemplateView):
             else:
                 valid_id.append(result['identifier'])
 
-        invalid_message = ["{} 无效 <br>".format(i) for i in invalid_id]
+        invalid_message = ["{} 无效 <br>".format(i.encode('utf-8')) for i in invalid_id]
         valid_message = []
 
         action = "选课" if action == "enroll" else "弃选"
@@ -304,7 +314,7 @@ class CourseEnroll(TemplateView):
                 valid_message.append("{0}  {1} 成功<br>".format(i, action))
         invalid_message.extend(valid_message)
 
-        import json
+
         self.msg = "".join(invalid_message)
 
         context = {'msg': self.msg,
@@ -319,6 +329,194 @@ class CreateSchool(TemplateView):
 
 class ManageUsers(TemplateView):
     pass
+
+
+@ensure_csrf_cookie
+def create_contractitem(request,contract_id):
+
+    if not request.user.is_authenticated():
+        return redirect("/login")
+    if not UserAttribute.get_user_attribute(request.user, "access_mosoadmin"):
+        return HttpResponse("No permission")
+
+    mosocontract = MosoContract.objects.get(pk=contract_id)
+    msg = ''
+
+    # create new contract's item
+    if request.method == 'POST':
+
+        start_date = request.POST.get('start_date','')
+        end_date = request.POST.get('end_date', '')
+        course_id = request.POST.get('course_id', '')
+
+        if not start_date or not end_date or not course_id:
+            msg = u"缺少必填字段"
+        else:
+            contract_item = ContractItem(contract=mosocontract)
+            contract_item.course_id = course_id
+            contract_item.start_date = start_date
+            contract_item.end_date = end_date
+            try:
+                from django.db import transaction
+                with transaction.atomic():
+                    contract_item.save()
+                    msg = u'条款添加成功'
+            except Exception as error:
+                msg = error
+
+    contractitems = ContractItem.objects.filter(contract=mosocontract)
+
+    # items infomation
+    data = []
+    for item in contractitems:
+        students = item.students.all()
+        name_list = u', '.join([stu.profile.name for stu in students])
+
+        course_id = SlashSeparatedCourseKey.from_deprecated_string(item.course_id.to_deprecated_string())
+        course = get_course_by_id(course_id)
+        item_data = [course.display_name, item.start_date, item.end_date, len(students), name_list.encode('utf-8')]
+        data.append(item_data)
+
+    datatable = dict(header=['Course ID',
+                             'Start Date',
+                             'End Date',
+                             'Current Quality',
+                             'Students'],
+                     title='Information for all Contract Items',
+                     data=data)
+    # contract information
+    mosocontract = [mosocontract.code.encode('utf-8'), mosocontract.organization.name.encode('utf-8'),
+                    mosocontract.signed_date]
+
+    # course options
+    def_ms = modulestore()
+    courselist = def_ms.get_courses()
+    courses_data = []
+    for course in courselist:
+        courses_data.append([course.display_name.encode('utf-8'), course.id.to_deprecated_string()])
+
+    context = {'msg': msg, 'courses_data': courses_data, 'mosocontract': mosocontract, 'datatable': datatable}
+    return render_to_response('mosoadmin/mosoadmin_create_contractitems.html', context)
+
+
+class Createcontract(TemplateView):
+    template_name = 'mosoadmin/mosoadmin_create_contract.html'
+    msg = None
+
+    def __init__(self, **kwargs):
+        self.msg = u''
+        super(Createcontract,self).__init__(**kwargs)
+
+    def make_common_context(self):
+        """Returns the datatable used for this view"""
+        pass
+
+    def get(self, request, *args, **kwargs):
+        if not request.user.is_authenticated():
+            return redirect("/login")
+        if not UserAttribute.get_user_attribute(request.user, "access_mosoadmin"):
+            return HttpResponse("No permission")
+
+        school_list = MosoSchool.objects.all()
+
+        context = {'msg':self.msg,'school_list':school_list, 'datatable':self.make_datatable()}
+        return render_to_response(self.template_name, context)
+
+    def post(self, request, *args, **kwargs):
+        if not request.user.is_authenticated():
+            return redirect("/login")
+        if not UserAttribute.get_user_attribute(request.user, "access_mosoadmin"):
+            return HttpResponse("No permission")
+
+        school_list = MosoSchool.objects.all()
+
+        school_name = request.POST.get('school','').strip()
+        contract_code = request.POST.get('contract_code','').strip()
+        signed_date = request.POST.get('signed_date', '')
+        if not school_name or not contract_code or not signed_date:
+            context = {'msg': u"缺少必填信息", 'school_list': school_list,'datatable':self.make_datatable()}
+            return render_to_response(self.template_name, context)
+
+        try:
+            school = MosoSchool.objects.get(name=school_name)
+        except MosoSchool.DoesNotExist:
+            context = {'msg': u"学校不存在", 'school_list': school_list,'datatable':self.make_datatable()}
+            return render_to_response(self.template_name, context)
+
+        contract = MosoContract(code=contract_code)
+        contract.organization = school
+        contract.signed_date = signed_date
+
+        msg = u'创建成功，请填写详细合同条款'
+        try:
+            from django.db import transaction
+            with transaction.atomic():
+                contract.save()
+        except IntegrityError:
+            msg = u"创建合同失败,合同编码重复"
+        except Exception:
+            msg = u"创建合同失败"
+
+        context = {'msg': msg, 'school_list': school_list, 'datatable':self.make_datatable()}
+        return render_to_response(self.template_name, context)
+
+
+    def make_datatable(self):
+        """Creates contracts information data table"""
+        contractlist = MosoContract.objects.all()
+
+        data = []
+        for contract in contractlist:
+            # .encode 解决Mako解码报错问题
+            data.append([contract.code.encode('utf-8'), contract.organization.name.encode('utf-8'), contract.signed_date, contract.id])
+
+        return dict(header=['Contract Code',
+                            'School',
+                            'Signed Date'],
+                    title='Information for all Contracts',
+                    data=data)
+
+
+def deactivate_task(uid, days=14):
+    """
+    uid：user.id
+    days: 默认两周后关闭账户
+    """
+    from djcelery.models import CrontabSchedule, PeriodicTask
+    from django.contrib.auth.models import User
+    import datetime
+
+    now = datetime.datetime.today()
+    deadline = now + datetime.timedelta(minutes=3)
+    task_date = CrontabSchedule()
+    task_date.minute = deadline.timetuple().tm_min
+    task_date.hour = deadline.timetuple().tm_hour
+    task_date.day_of_month = deadline.timetuple().tm_mday
+    task_date.month_of_year = deadline.timetuple().tm_mon
+    try:
+        from django.db import transaction
+        with transaction.atomic():
+            task_date.save()
+    except:
+        return False
+
+    user = User.objects.get(pk=uid)
+
+    name = "Deactivate_User_%s" % uid
+    new_task = PeriodicTask(name=name)
+    new_task.name = name
+    new_task.task = 'mosoadmin.tasks.deactivate_tempuser'
+    new_task.crontab = task_date
+    new_task.args = "[%s]" % uid
+    new_task.enabled = True
+    try:
+        from django.db import transaction
+        with transaction.atomic():
+            new_task.save()
+    except:
+        return False
+
+    return True
 
 
 class CreateUser(TemplateView):
@@ -358,17 +556,18 @@ class CreateUser(TemplateView):
         if action == 'create_user':
             uname = request.POST.get('student_uname', '').strip()
             name = request.POST.get('student_fullname', '').strip()
+            is_tempuser = request.POST.get('is_tempuser', '').strip()
             password = request.POST.get('student_password', '').strip()
             self.msg = u'<h4>{0}</h4><p>{1}</p><hr />'.format(
                 _('Create User Results'),
-                self.create_user(uname, name, password, request))
+                self.create_user(uname, name, is_tempuser,password,request))
 
         context = {
             'msg': self.msg,
         }
         return render_to_response(self.template_name, context)
 
-    def create_user(self, uname, name, password=None, request=None):
+    def create_user(self, uname, name, is_tempuser, password='edx', request=None):
         """ Creates a user (both SSL and regular)"""
 
         if not uname:
@@ -410,6 +609,60 @@ class CreateUser(TemplateView):
 
         mosouser = MosoUser(user=user,creted_by=request.user)
         mosouser.save()
-
         msg += _('User {user} created successfully!').format(user=user)
+
+        if is_tempuser:
+            try:
+                task_result = deactivate_task(user.id)
+                if task_result:
+                    msg += "<br> Configure Deactivate Task successfully!"
+                    print("*" * 50)
+                    print("Configure Deactivate Task successfully!")
+            except:
+                msg += "<br> Failed to Configure Deactivate Task!"
+                print("Failed to Configure Deactivate Task!")
+        else:
+            msg += "<br> Failed to Configure Deactivate Task!"
+
         return msg
+
+
+from mosoadmin.models import MosoUser
+from rest_framework.views import APIView
+from rest_framework.response import Response
+
+from django.http import JsonResponse
+
+
+def get_displayname(course_id):
+    """
+    From course_id  get course's display name
+    """
+    course_id = SlashSeparatedCourseKey.from_deprecated_string(course_id.to_deprecated_string())
+    course = get_course_by_id(course_id)
+    return course.display_name
+
+
+def get_mosousers(request):
+    if not request.user.is_authenticated():
+        return redirect("/login")
+    if not UserAttribute.get_user_attribute(request.user, "access_mosoadmin"):
+        return HttpResponse("No permission")
+
+    mosousers = MosoUser.objects.all()
+
+    data = []
+    for mosouser in mosousers:
+        name = mosouser.user.profile.name
+        email = mosouser.user.email
+        activate_start = mosouser.activate_start
+        activate_end = mosouser.activate_end
+        school = mosouser.school.name if mosouser.school else mosouser.school
+        contract_code_course_name = [(item.contract.code, get_displayname(item.course_id)) for item in mosouser.user.student_contractitem.all()]
+        data.append([name, email, activate_start, activate_end, school, contract_code_course_name])
+
+    table_data = dict(data=data)
+
+    return JsonResponse(table_data)
+
+

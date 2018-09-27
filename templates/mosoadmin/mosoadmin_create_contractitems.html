@@ -81,7 +81,40 @@ textarea {
         <a href="${reverse('manageusers')}">用户管理</a>
       </h2>
       <hr />
-
+      <!-- 展示合同条款 -->
+         %if datatable:
+        <h2>合同信息：</h2>
+        <table class="stat_table">
+            <tr>
+                <th>合同编码</th>
+                <th>学校</th>
+                <th>签署日期</th>
+            </tr>
+            <tr>
+                %for cell in mosocontract:
+                    <td>${cell}</td>
+                %endfor
+            </tr>
+        </table>
+            <br/>
+              <h2>课程购买条款信息：</h2>
+              <table class="stat_table">
+                <tr>
+                %for hname in datatable['header']:
+                  <th>${hname}</th>
+                %endfor
+                </tr>
+                %for row in datatable['data']:
+                <tr>
+                      %for cell in row:
+                      <td>${cell}</td>
+                      %endfor
+                </tr>
+                %endfor
+              </table>
+        %endif
+       <hr>
+      <!-- 添加合同条款 -->
       <form name="action" method="POST">
 
         <input type="hidden" name="csrfmiddlewaretoken" value="${ csrf_token }" />
@@ -91,29 +124,31 @@ textarea {
                <p id="message">结果提示：<br>${msg}</p>
           </li>
           <br>
+
           <li class="field text" style="padding-bottom: 1.2em">
-            <label for="student_uname">电子邮件</label>
-            <input type="text" name="student_uname" size=40 />
+            <label for="course_id">课程ID：</label>
+            <select  type="text" name="course_id">
+                 %for course in courses_data:
+                  <option value="${course[1]}">${course[0]}</option>
+                 %endfor
+           </select>
           </li>
 
           <li class="field text">
-            <label for="student_fullname">${_('Full Name')}</label>
-            <input type="text" name="student_fullname" size=40 />
+            <label for="start_date">开始日期：</label>
+            <input type="date" name="start_date" id="start_date" value="" size=40 />
           </li>
+
           <li class="field text">
-            <label for="student_password">${_('Password')}</label>
-            <input type="password" name="student_password" size=40 />
+            <label for="end_date">结束日期：</label>
+            <input type="date" name="end_date" id="end_date" value="" size=40 />
           </li>
-          <li class="field text">
-            <label for="is_tempuser">试用账号</label>
-            <input type="checkbox" name="is_tempuser" id="is_tempuser" value="true" aria-describedby="heading-batch-enrollment">
-             勾选此选项后，两周后账户将会失效。
-          </li>
+
         </ul>
 
         <div class="form-actions">
           <p>
-            <button type="submit" name="action" value="create_user">${_('Create user')}</button>
+            <button type="submit" name="action" value="create_item">添加条款</button>
           </p>
         </div>
 
@@ -124,7 +159,14 @@ textarea {
 </section>
 
 <%block name="js_extra">
-  <script type="text/javascript">
-
-  </script>
+    <script type="text/javascript">
+            window.onload = function(){
+                $("#progress_add").submit(function(e) {
+                    e.preventDefault();
+                    var note_content = $("#note_content").val();
+                    var csrftoken = Cookies.get('csrftoken');
+                    progress_add(note_content,{{ id }},csrftoken);
+                });
+            }
+    </script>
 </%block>

@@ -77,62 +77,11 @@ textarea {
       <h2 class="instructor-nav">
         <a href="${reverse('createuser')}">创建用户</a>
         <a href="${reverse('mosoadmin_courses')}">选课</a>
-        <a href="${reverse('manageusers')}">管理用户</a>
+        <a href="${reverse('createcontract')}">合同管理</a>
+        <a href="${reverse('manageusers')}">用户管理</a>
       </h2>
       <hr />
-
-      <form name="action" method="POST">
-
-        <input type="hidden" name="csrfmiddlewaretoken" value="${ csrf_token }" />
-
-        <ul class="list-input">
-           <li class="field text">
-               <p id="message">结果提示：<br>${msg}</p>
-           </li>
-            <br>
-           <li class="field text">
-            <label for="course_id">请填入下表中课程对应的ID</label>
-            <input type="text" name="course_id" size=40 />
-          </li>
-
-          <li class="field text" style="padding-bottom: 1.2em">
-            <label for="identifiers">输入电子邮箱地址与／或 用户名，以逗号分割或重启一行。 对该类问题您不会受到提示邮件，因此请仔细检查，确保拼写无误。</label>
-              <textarea rows="6" cols="50" type="text" name="identifiers"></textarea>
-          </li>
-
-          <li class="field text" style="padding-bottom: 1.2em">
-            <input type="hidden" id="is_course_white_label" value="False">
-            <label for="auto-enroll">
-                <p>
-                    如果勾选了该选项，即使未在平台注册的用户也会自动选修本课程。
-                    <br>
-                    如果没有勾选该选项，未在平台注册的用户不能选课。当然，一旦用户注册后，就随时可以选课。
-                </p>
-            </label>
-             <input type="checkbox" name="auto_enroll" id="auto_enroll" value="true"  aria-describedby="heading-batch-enrollment">
-          </li>
-
-          <li class="field text" style="padding-bottom: 1.2em">
-            <label for="email-students">
-                <p>如果勾选该选项，用户将受到一封通知邮件。</p>
-            </label>
-             <input type="checkbox" name="email_students" id="email_students" value="true" aria-describedby="heading-batch-enrollment" >
-          </li>
-        </ul>
-
-        <div class="form-actions">
-          <p>
-            <button type="submit" name="action" value="enroll">选课</button>
-              <button type="submit" name="action" value="unenroll">弃选</button>
-          </p>
-        </div>
-
-      </form>
         %if datatable:
-            <br/>
-            <br/>
-            <p>
-              <hr width="100%">
               <h2>${datatable['title']}</h2>
               <table class="stat_table">
                 <tr>
@@ -148,8 +97,63 @@ textarea {
               </tr>
                 %endfor
               </table>
-            </p>
         %endif
+      <hr width="100%">
+      <form name="action" method="POST">
+
+        <input type="hidden" name="csrfmiddlewaretoken" value="${ csrf_token }" />
+
+        <ul class="list-input">
+           <li class="field text">
+               <p id="message">结果提示：<br>${msg}</p>
+           </li>
+            <br>
+           <li class="field text">
+            <label for="course_id">请填入下表中课程对应的ID</label>
+            <input type="text" name="course_id" size=40 />
+          </li>
+
+          <li class="field text" style="padding-bottom: 1.2em">
+            <label for="identifiers">
+                  输入电子邮箱地址，以逗号分割或重启一行。
+                  ${_("You will not get notification for emails that bounce, so please double-check spelling.")}
+            </label>
+              <textarea rows="6" cols="50" type="text" name="identifiers"></textarea>
+          </li>
+
+          <li class="field text" style="padding-bottom: 1.2em">
+            <input type="hidden" id="is_course_white_label" value="False">
+            <label for="auto-enroll">
+                <p>
+                    ${_("If this option is <em>checked</em>, users who have not yet registered for {platform_name} will be automatically enrolled.").format(platform_name=settings.PLATFORM_NAME)}
+                    <br>
+                    ${_("If this option is left <em>unchecked</em>, users who have not yet registered for {platform_name} will not be enrolled, but will be allowed to enroll once they make an account.").format(platform_name=settings.PLATFORM_NAME)}
+                    <br>
+                    ${_("Checking this box has no effect if 'Unenroll' is selected.")}
+                </p>
+            </label>
+             <input type="checkbox" name="auto_enroll" id="auto_enroll" value="true"  aria-describedby="heading-batch-enrollment">
+              ${_("Auto Enroll")}
+          </li>
+
+          <li class="field text" style="padding-bottom: 1.2em">
+            <label for="email-students">
+                <p>${_("If this option is <em>checked</em>, users will receive an email notification.")}</p>
+            </label>
+             <input type="checkbox" name="email_students" id="email_students" value="true" aria-describedby="heading-batch-enrollment" >
+              ${_("Notify users by email")}
+          </li>
+        </ul>
+
+        <div class="form-actions">
+          <p>
+            <button type="submit" name="action" value="enroll">选课</button>
+              <button type="submit" name="action" value="unenroll">弃选</button>
+          </p>
+        </div>
+
+      </form>
+
     </section>
   </div>
 </section>

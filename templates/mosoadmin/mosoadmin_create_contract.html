@@ -1,3 +1,4 @@
+## -*- coding: utf-8 -*-
 <%inherit file="../main.html" />
 <%!
     from django.core.urlresolvers import reverse
@@ -82,7 +83,26 @@ textarea {
       </h2>
       <hr />
 
-      <form name="action" method="POST">
+        %if datatable:
+              <h2>${datatable['title']}</h2>
+              <table class="stat_table">
+                <tr>
+                %for hname in datatable['header']:
+                  <th>${hname}</th>
+                %endfor
+                </tr>
+                %for row in datatable['data']:
+                  <tr>
+                      <td><a style="text-decorations:none; color:inherit;" href="/mosoadmin/createcontractitem/${row[3]}/">${row[0]}</a></td>
+                      <td>${row[1]}</td>
+                      <td>${row[2]}</td>
+
+                  </tr>
+                %endfor
+              </table>
+        %endif
+        <hr width="100%">
+        <form name="action" method="POST">
 
         <input type="hidden" name="csrfmiddlewaretoken" value="${ csrf_token }" />
 
@@ -92,28 +112,29 @@ textarea {
           </li>
           <br>
           <li class="field text" style="padding-bottom: 1.2em">
-            <label for="student_uname">电子邮件</label>
-            <input type="text" name="student_uname" size=40 />
+            <label for="contract_code">合同编码：</label>
+            <input type="text" name="contract_code" size=40 />
           </li>
 
           <li class="field text">
-            <label for="student_fullname">${_('Full Name')}</label>
-            <input type="text" name="student_fullname" size=40 />
+            <label for="school">学校：</label>
+            <input  list="pasta" name="school" id="school" type="text" size=40/>
+                 <datalist id="pasta">
+                 %for school in school_list:
+                  <option value="${school.name}"></option>
+                 %endfor
+                 </datalist>
           </li>
+
           <li class="field text">
-            <label for="student_password">${_('Password')}</label>
-            <input type="password" name="student_password" size=40 />
-          </li>
-          <li class="field text">
-            <label for="is_tempuser">试用账号</label>
-            <input type="checkbox" name="is_tempuser" id="is_tempuser" value="true" aria-describedby="heading-batch-enrollment">
-             勾选此选项后，两周后账户将会失效。
+            <label for="signed_date">签署日期：</label>
+            <input type="date" name="signed_date" id="signed_date" size=40 />
           </li>
         </ul>
 
         <div class="form-actions">
           <p>
-            <button type="submit" name="action" value="create_user">${_('Create user')}</button>
+            <button type="submit" name="action" value="create_contract">创建合同</button>
           </p>
         </div>
 
