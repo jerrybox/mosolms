@@ -1,4 +1,56 @@
 ### Moso Admin
+* cd /edx/app/edxapp/edx-platform/lms/djangoapps/
+    ```
+    chown edxapp:edxapp -R mosoadmin
+    ```
+
+* vim /edx/app/edxapp/edx-platform/lms/envs/common.py
+    ```
+    MAKO_TEMPLATES['main'] = [
+        PROJECT_ROOT / 'templates',
+        COMMON_ROOT / 'templates',
+        COMMON_ROOT / 'lib' / 'capa' / 'capa' / 'templates',
+        COMMON_ROOT / 'djangoapps' / 'pipeline_mako' / 'templates',
+        OPENEDX_ROOT / 'core' / 'djangoapps' / 'cors_csrf' / 'templates',
+        OPENEDX_ROOT / 'core' / 'djangoapps' / 'dark_lang' / 'templates',
+        OPENEDX_ROOT / 'core' / 'lib' / 'license' / 'templates',
+        PROJECT_ROOT / 'djangoapps' / 'mosoadmin' / 'templates', # add the mosoadmin templates path
+    ]
+
+    TEMPLATES = [
+        {
+            'BACKEND': 'django.template.backends.django.DjangoTemplates',
+            # Don't look for template source files inside installed applications.
+            'APP_DIRS': False,
+            # Instead, look for template source files in these dirs.
+            'DIRS': [
+                PROJECT_ROOT / "templates",
+                COMMON_ROOT / 'templates',
+                COMMON_ROOT / 'lib' / 'capa' / 'capa' / 'templates',
+                COMMON_ROOT / 'djangoapps' / 'pipeline_mako' / 'templates',
+                COMMON_ROOT / 'static',  # required to statically include common Underscore templates
+                PROJECT_ROOT / 'djangoapps' / 'mosoadmin' / 'templates', # add the mosoadmin templates path
+            ],
+        }
+    ]
+    ```
+
+* vim /edx/app/edxapp/edx-platform/lms/urls.py
+    ```
+    urlpatterns += (
+        url(r'^mosoadmin/', include('mosoadmin.urls')),
+    )
+    ```
+
+### Cutome registeration field used to login
+* After add custome field (telephone) to edx user, how to use it login ?
+https://github.com/open-craft/custom-form-app
+    ```
+    vim /edx/app/edxapp/edx-platform/lms/envs/common.py
+        AUTHENTICATION_BACKENDS += (
+            'mosoadmin.backends.ModelBackend',
+        )
+    ```
 
 ### Celery Beat
 * vim /edx/app/edxapp/edx-platform/lms/envs/common.py +1860

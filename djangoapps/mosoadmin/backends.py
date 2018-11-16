@@ -8,12 +8,11 @@ class ModelBackend(object):
     """
     Authenticates against settings.AUTH_USER_MODEL.
 
-    REFERENCE：https://github.com/open-craft/custom-form-app
-    After add custome field （telephone ）to edx user, how to use it login?
-
+    REFERENCE:https://github.com/open-craft/custom-form-app
+    After add custome field (telephone) to edx user, how to use it login ?
     vim /edx/app/edxapp/edx-platform/lms/envs/common.py
         AUTHENTICATION_BACKENDS += (
-            'mosoadmin.backends.ModelBackend',
+            'templates.backends.ModelBackend',
         )
 
     After that we can use custom_form_app.favorite_movie login  the /admin

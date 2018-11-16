@@ -1,6 +1,6 @@
 # -*- coding:utf-8 -*-
 """
-This module creates a mosoadmin dashboard for managing  and viewing
+This module creates a templates dashboard for managing  and viewing
 courses.
 """
 import unicodecsv as csv
@@ -505,7 +505,7 @@ def deactivate_task(uid, days=14):
     name = "Deactivate_User_%s" % uid
     new_task = PeriodicTask(name=name)
     new_task.name = name
-    new_task.task = 'mosoadmin.tasks.deactivate_tempuser'
+    new_task.task = 'templates.tasks.deactivate_tempuser'
     new_task.crontab = task_date
     new_task.args = "[%s]" % uid
     new_task.enabled = True

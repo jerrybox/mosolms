@@ -30,7 +30,7 @@ urlpatterns = (
     
     url(r'^$', 'branding.views.index', name="root"),   # Main marketing page, or redirect to courseware
     
-    url(r'^mosoadmin/', include('mosoadmin.urls')), # mosoadmin
+    url(r'^templates/', include('templates.urls')), # templates
 
     url(r'', include('student.urls')),
     # TODO: Move lms specific student views out of common code

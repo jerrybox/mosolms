@@ -2239,8 +2239,8 @@ INSTALLED_APPS = (
 
     'experiments',
     
-    #mosoadmin
-    'mosoadmin'
+    #templates
+    'templates'
 )
 
 ######################### CSRF #########################################
